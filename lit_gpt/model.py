@@ -142,6 +142,7 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config)
         self.norm_2 = None if config.shared_attention_norm else config.norm_class(config.n_embd, eps=config.norm_eps)
         self.mlp = config.mlp_class(config)
+        self.norm_3 = None if not config.extra_norm or config.shared_attention_norm else config.norm_class(config.n_embd, eps=config.norm_eps)
 
         self.config = config
 
@@ -166,6 +167,8 @@ class Block(nn.Module):
                 )
             x = h + x
             x = self.mlp(self.norm_2(x)) + x
+        if self.norm_3:
+            x = self.norm_3(x)
         return x
 
 
@@ -284,11 +287,12 @@ class LLaMAMLP(nn.Module):
         self.fc_1 = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
         self.fc_2 = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
         self.proj = nn.Linear(config.intermediate_size, config.n_embd, bias=config.bias)
+        self.activation_func = getattr(torch.nn.functional, config.activation_func)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_fc_1 = self.fc_1(x)
         x_fc_2 = self.fc_2(x)
-        x = torch.nn.functional.silu(x_fc_1) * x_fc_2
+        x = self.activation_func(x_fc_1) * x_fc_2
         return self.proj(x)
 
 
