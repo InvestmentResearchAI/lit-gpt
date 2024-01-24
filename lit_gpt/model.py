@@ -7,6 +7,7 @@ https://github.com/EleutherAI/gpt-neox/tree/main/megatron/model.
 """
 
 import math
+from copy import deepcopy
 from typing import Any, Optional, Tuple
 
 import torch
@@ -58,6 +59,19 @@ class GPT(nn.Module):
             self.cos, self.sin = self.rope_cache(device=self.cos.device)
         # the mask and kv cache size will get updated on `set_kv_cache`. we cannot update it here because we don't know
         # if the kv cache is expected
+
+    def patch_block(self, idx: int, **kwargs) -> None:
+        """
+        Replaces a block at idx with a new block created using a patched config.
+        See lit_gpt/config.py::Config for available params.
+        
+        Example:
+        >>> model.patch_block(10, rope_base=500)
+        """
+        old_block = self.transformer['h'][idx]
+        config = deepcopy(old_block.config)
+        config.__dict__.update({**kwargs})
+        self.transformer['h'][idx] = Block(config)
 
     def reset_parameters(self) -> None:
         # Trigger resetting the rope-cache
