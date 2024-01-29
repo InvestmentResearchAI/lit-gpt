@@ -5,18 +5,20 @@
 import math
 import pickle
 import sys
+from contextlib import nullcontext
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, ContextManager, Dict, Iterable, List, Mapping, Optional, TypeVar, Union, Literal
 
 import lightning as L
-import torch
+import torch 
 import torch.nn as nn
 import torch.utils._device
 from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.utilities.load import _lazy_load as lazy_load
 from torch.serialization import normalize_storage_type
 from typing_extensions import Self
+#from lit_gpt import Tokenizer
 
 if TYPE_CHECKING:
     from lit_gpt import GPT
@@ -39,6 +41,21 @@ def num_parameters(module: nn.Module, requires_grad: Optional[bool] = None) -> i
             else:
                 total += p.numel()
     return total
+
+
+def gptq_quantization(enabled: bool = False) -> ContextManager:
+    if not enabled:
+        return nullcontext()
+
+    from lightning.fabric.plugins.precision.utils import _ClassReplacementContextManager
+
+    from quantize.gptq import ColBlockQuantizedLinear
+
+    class QuantizedLinear(ColBlockQuantizedLinear):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, bits=4, tile_cols=-1, **kwargs)
+
+    return _ClassReplacementContextManager({"torch.nn.Linear": QuantizedLinear})
 
 
 def check_valid_checkpoint_dir(checkpoint_dir: Path) -> None:
@@ -366,3 +383,31 @@ class CycleIterator:
 
     def __iter__(self) -> Self:
         return self
+    
+    
+    
+def pad_batched_tokens(
+    prompts: List[torch.Tensor], 
+    pad_id,
+    padding_direction: Literal["left", "right"] = "left"
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+    
+    """takes a list of tokenized prompts (tensors) and returns a left or right padded tensor of tensors. 
+    Left pads by default
+    
+    Returns: the batched tensor of padded tokenized input sequences, and the corresponding padding mask."""
+    
+    lengths = torch.tensor([p.size(0) for p in prompts], device=prompts[0].device)
+    
+    if padding_direction == "left":    
+        encoded = torch.stack(
+            [torch.nn.functional.pad(p, (max(lengths) - lengths[i], 0), value=pad_id) for i, p in enumerate(prompts)], 
+            dim=0)
+    else:
+        encoded = torch.stack(
+            [torch.nn.functional.pad(p, (0, max(lengths) - lengths[i]), value=pad_id) for i, p in enumerate(prompts)], 
+            dim=0)
+      
+    padding_mask = encoded != pad_id
+    
+    return encoded, padding_mask

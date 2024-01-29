@@ -56,6 +56,7 @@ class Config:
     activation_func: str = 'silu'
     _mlp_class: Literal["GptNeoxMLP", "LLaMAMLP"] = "GptNeoxMLP"
     gelu_approximate: str = "none"
+    extra_norm: bool = False
     intermediate_size: Optional[int] = None
     rope_condense_ratio: int = 1
     rope_base: int = 10000
