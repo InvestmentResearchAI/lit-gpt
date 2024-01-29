@@ -8,7 +8,7 @@ https://github.com/EleutherAI/gpt-neox/tree/main/megatron/model.
 
 import math
 from typing import Any, Optional, Tuple
-import deepcopy
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -259,7 +259,7 @@ class CausalSelfAttention(nn.Module):
             q, 
             k, 
             v, 
-            attn_mask=(1.0 - mask.to(dtype=q.dtype)) * -10000.0, 
+            attn_mask=None if mask is None else (1.0 - mask.to(dtype=q.dtype)) * -10000.0, 
             dropout_p=0.0, 
             scale=scale, 
             is_causal=mask is None
