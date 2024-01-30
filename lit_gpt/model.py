@@ -23,7 +23,8 @@ class GPT(nn.Module):
         assert config.padded_vocab_size is not None
         self.config = config
 
-        self.lm_head = nn.Linear(config.n_embd, config.padded_vocab_size, bias=config.lm_head_bias)
+        self.lm_head = nn.Linear(
+            config.n_embd, config.padded_vocab_size, bias=config.lm_head_bias)
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.padded_vocab_size, config.n_embd),
@@ -45,7 +46,8 @@ class GPT(nn.Module):
         This allows setting a smaller number to avoid allocating unused memory
         """
         if value > self.config.block_size:
-            raise ValueError(f"Cannot attend to {value}, block size is only {self.config.block_size}")
+            raise ValueError(
+                f"Cannot attend to {value}, block size is only {self.config.block_size}")
         self._max_seq_length = value
         if not hasattr(self, "cos"):
             # first call
@@ -64,7 +66,7 @@ class GPT(nn.Module):
         """
         Replaces a block at idx with a new block created using a patched config.
         See lit_gpt/config.py::Config for available params.
-        
+
         Example:
         >>> model.patch_block(10, rope_base=500)
         """
@@ -86,28 +88,25 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx: torch.Tensor, input_pos: Optional[torch.Tensor] = None, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, idx: torch.Tensor, input_pos: Optional[torch.Tensor] = None) -> torch.Tensor:
         T = idx.size(1)
         if self.max_seq_length < T:
-            raise ValueError(f"Cannot forward sequence of length {T}, max seq length is only {self.max_seq_length}.")
+            raise ValueError(
+                f"Cannot forward sequence of length {T}, max seq length is only {self.max_seq_length}.")
 
         if input_pos is not None:  # use the kv cache
             cos = self.cos.index_select(0, input_pos)
             sin = self.sin.index_select(0, input_pos)
-            
-            if attention_mask is None:
-                if self.mask_cache is None:
-                    raise TypeError("You need to call `gpt.set_kv_cache() or manually pass an attention mask`")
-                mask = self.mask_cache.index_select(2, input_pos)
-            else:
-                mask = attention_mask       
-
+            if self.mask_cache is None:
+                raise TypeError("You need to call `gpt.set_kv_cache()`")
+            mask = self.mask_cache.index_select(2, input_pos)
         else:
             cos = self.cos[:T]
             sin = self.sin[:T]
-            mask = attention_mask
+            mask = None
 
-        x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+        # token embeddings of shape (b, t, n_embd)
+        x = self.transformer.wte(idx)
         for block in self.transformer.h:
             x = block(x, cos, sin, mask, input_pos)
         x = self.transformer.ln_f(x)
@@ -132,7 +131,6 @@ class GPT(nn.Module):
         rope_cache_length: Optional[int] = None,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-        padding_mask: Optional[torch.Tensor] = None,
     ) -> None:
         if rope_cache_length is None:
             rope_cache_length = self.cos.size(-1)
@@ -147,7 +145,7 @@ class GPT(nn.Module):
         if self.mask_cache is None or self.mask_cache.size(3) != max_seq_length:
             # passing `attn_mask` to SDPA disables the flash implementation. since we only need the mask
             # for the kv-cache support (only during inference), we only create it in that situation
-            self.mask_cache = build_mask_cache(max_seq_length, device, padding_mask)
+            self.mask_cache = build_mask_cache(max_seq_length, device)
 
     def clear_kv_cache(self) -> None:
         self.mask_cache = None
@@ -160,7 +158,8 @@ class Block(nn.Module):
         super().__init__()
         self.norm_1 = config.norm_class(config.n_embd, eps=config.norm_eps)
         self.attn = CausalSelfAttention(config)
-        self.norm_2 = None if config.shared_attention_norm else config.norm_class(config.n_embd, eps=config.norm_eps)
+        self.norm_2 = None if config.shared_attention_norm else config.norm_class(
+            config.n_embd, eps=config.norm_eps)
         self.mlp = config.mlp_class(config)
 
         self.config = config
@@ -217,8 +216,10 @@ class CausalSelfAttention(nn.Module):
         # assemble into a number of query groups to support MHA, MQA and GQA together (see `config.n_query_groups`)
         q_per_kv = self.config.n_head // self.config.n_query_groups
         total_qkv = q_per_kv + 2  # each group has 1+ queries, 1 key, and 1 value
-        qkv = qkv.view(B, T, self.config.n_query_groups, total_qkv, self.config.head_size)
-        qkv = qkv.permute(0, 2, 3, 1, 4)  # (B, n_query_groups, total_qkv, T, hs)
+        qkv = qkv.view(B, T, self.config.n_query_groups,
+                       total_qkv, self.config.head_size)
+        # (B, n_query_groups, total_qkv, T, hs)
+        qkv = qkv.permute(0, 2, 3, 1, 4)
 
         # split batched computation into three
         q, k, v = qkv.split((q_per_kv, 1, 1), dim=2)
@@ -227,8 +228,10 @@ class CausalSelfAttention(nn.Module):
         # training: flash attention requires it
         # inference: multi-query would require a full kv cache so avoid it to limit its memory usage
         if self.config.n_query_groups != self.config.n_head and (input_pos is None or self.config.n_query_groups != 1):
-            k = k.expand(B, self.config.n_query_groups, q_per_kv, T, self.config.head_size)
-            v = v.expand(B, self.config.n_query_groups, q_per_kv, T, self.config.head_size)
+            k = k.expand(B, self.config.n_query_groups,
+                         q_per_kv, T, self.config.head_size)
+            v = v.expand(B, self.config.n_query_groups,
+                         q_per_kv, T, self.config.head_size)
 
         q = q.reshape(B, -1, T, self.config.head_size)  # (B, nh_q, T, hs)
         k = k.reshape(B, -1, T, self.config.head_size)  # (B, nh_k, T, hs)
@@ -236,8 +239,8 @@ class CausalSelfAttention(nn.Module):
 
         q_roped = apply_rope(q[..., : self.config.rope_n_elem], cos, sin)
         k_roped = apply_rope(k[..., : self.config.rope_n_elem], cos, sin)
-        q = torch.cat((q_roped, q[..., self.config.rope_n_elem :]), dim=-1)
-        k = torch.cat((k_roped, k[..., self.config.rope_n_elem :]), dim=-1)
+        q = torch.cat((q_roped, q[..., self.config.rope_n_elem:]), dim=-1)
+        k = torch.cat((k_roped, k[..., self.config.rope_n_elem:]), dim=-1)
 
         if input_pos is not None:
             if not isinstance(self.kv_cache, KVCache):
@@ -246,7 +249,8 @@ class CausalSelfAttention(nn.Module):
 
         y = self.scaled_dot_product_attention(q, k, v, mask)
 
-        y = y.reshape(B, T, self.config.n_embd)  # re-assemble all head outputs side by side
+        # re-assemble all head outputs side by side
+        y = y.reshape(B, T, self.config.n_embd)
 
         # output projection
         return self.proj(y)
@@ -256,16 +260,9 @@ class CausalSelfAttention(nn.Module):
     ) -> torch.Tensor:
         scale = 1.0 / math.sqrt(self.config.head_size)
         y = torch.nn.functional.scaled_dot_product_attention(
-            q, 
-            k, 
-            v, 
-            attn_mask=None if mask is None else (1.0 - mask.to(dtype=q.dtype)) * -10000.0, 
-            dropout_p=0.0, 
-            scale=scale, 
-            is_causal=mask is None
-        )
+            q, k, v, attn_mask=mask, dropout_p=0.0, scale=scale, is_causal=mask is None)
         return y.transpose(1, 2)
-    
+
     def build_kv_cache(
         self,
         batch_size: int,
@@ -278,7 +275,8 @@ class CausalSelfAttention(nn.Module):
         v_shape = (batch_size, heads, max_seq_length, self.config.head_size)
         if rope_cache_length is None:
             if self.config.rotary_percentage != 1.0:
-                raise TypeError("Please pass the `rope_cache_length=gpt.cos.size(-1)` value")
+                raise TypeError(
+                    "Please pass the `rope_cache_length=gpt.cos.size(-1)` value")
             k_shape = v_shape
         else:
             k_shape = (
@@ -293,23 +291,29 @@ class CausalSelfAttention(nn.Module):
 class GptNeoxMLP(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
-        self.fc = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
-        self.proj = nn.Linear(config.intermediate_size, config.n_embd, bias=config.bias)
+        self.fc = nn.Linear(
+            config.n_embd, config.intermediate_size, bias=config.bias)
+        self.proj = nn.Linear(config.intermediate_size,
+                              config.n_embd, bias=config.bias)
 
         self.config = config
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc(x)
-        x = torch.nn.functional.gelu(x, approximate=self.config.gelu_approximate)
+        x = torch.nn.functional.gelu(
+            x, approximate=self.config.gelu_approximate)
         return self.proj(x)
 
 
 class LLaMAMLP(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
-        self.fc_1 = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
-        self.fc_2 = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
-        self.proj = nn.Linear(config.intermediate_size, config.n_embd, bias=config.bias)
+        self.fc_1 = nn.Linear(
+            config.n_embd, config.intermediate_size, bias=config.bias)
+        self.fc_2 = nn.Linear(
+            config.n_embd, config.intermediate_size, bias=config.bias)
+        self.proj = nn.Linear(config.intermediate_size,
+                              config.n_embd, bias=config.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_fc_1 = self.fc_1(x)
@@ -322,7 +326,8 @@ class LLaMAMoE(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.gate = nn.Linear(config.n_embd, config.n_expert, bias=False)
-        self.experts = nn.ModuleList(LLaMAMLP(config) for _ in range(config.n_expert))
+        self.experts = nn.ModuleList(LLaMAMLP(config)
+                                     for _ in range(config.n_expert))
 
         self.config = config
 
@@ -334,14 +339,17 @@ class LLaMAMoE(nn.Module):
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
         x = x.view(-1, C)  # (B*T, C)
         router = self.gate(x)  # (B*T, n_expert)
-        probs, indices = torch.topk(router, self.config.n_expert_per_token)  # (B*T, n_expert_per_token)
+        # (B*T, n_expert_per_token)
+        probs, indices = torch.topk(router, self.config.n_expert_per_token)
         probs = probs.softmax(dim=1, dtype=torch.float).to(dtype=x.dtype)
-        masks = indices.unsqueeze(-1) == torch.arange(self.config.n_expert, device=x.device)
+        masks = indices.unsqueeze(-1) == torch.arange(
+            self.config.n_expert, device=x.device)
         masks = masks.permute(2, 0, 1)  # (n_expert, B*T, n_expert_per_token)
         y = torch.zeros_like(x)  # (B*T, C)
         for mask, expert in zip(masks, self.experts):
             token_idx, expert_idx = torch.where(mask)
-            y[token_idx] += probs[token_idx, expert_idx, None] * expert(x[token_idx])
+            y[token_idx] += probs[token_idx, expert_idx, None] * \
+                expert(x[token_idx])
         return y.view(B, T, C)
 
 
@@ -355,7 +363,8 @@ def build_rope_cache(
     https://github.com/labmlai/annotated_deep_learning_paper_implementations/blob/master/license.
     """
     # $\Theta = {\theta_i = 10000^{\frac{2(i-1)}{d}}, i \in [1, 2, ..., \frac{d}{2}]}$
-    theta = 1.0 / (base ** (torch.arange(0, n_elem, 2, device=device).float() / n_elem))
+    theta = 1.0 / \
+        (base ** (torch.arange(0, n_elem, 2, device=device).float() / n_elem))
 
     # Create position indexes `[0, 1, ..., seq_len - 1]`
     seq_idx = torch.arange(seq_len, device=device) / condense_ratio
@@ -369,7 +378,7 @@ def build_rope_cache(
 def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     head_size = x.size(-1)
     x1 = x[..., : head_size // 2]  # (B, nh, T, hs/2)
-    x2 = x[..., head_size // 2 :]  # (B, nh, T, hs/2)
+    x2 = x[..., head_size // 2:]  # (B, nh, T, hs/2)
     rotated = torch.cat((-x2, x1), dim=-1)  # (B, nh, T, hs)
     roped = (x * cos) + (rotated * sin)
     return roped.to(dtype=x.dtype)
@@ -384,8 +393,10 @@ class KVCache(nn.Module):
         dtype: Optional[torch.dtype] = None,
     ) -> None:
         super().__init__()
-        self.register_buffer("k", torch.zeros(k_shape, device=device, dtype=dtype), persistent=False)
-        self.register_buffer("v", torch.zeros(v_shape, device=device, dtype=dtype), persistent=False)
+        self.register_buffer("k", torch.zeros(
+            k_shape, device=device, dtype=dtype), persistent=False)
+        self.register_buffer("v", torch.zeros(
+            v_shape, device=device, dtype=dtype), persistent=False)
 
     def forward(self, input_pos: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # move the buffer to the activation dtype for when AMP is used
@@ -401,13 +412,7 @@ class KVCache(nn.Module):
         torch.nn.init.zeros_(self.v)
 
 
-def build_mask_cache(max_seq_length: int, device: Optional[torch.device] = None, padding_mask : Optional[torch.Tensor] = None) -> torch.Tensor:
-    ones = torch.ones((max_seq_length, max_seq_length), device=device, dtype=torch.bool)
-    if padding_mask == None:        
-        return torch.tril(ones).unsqueeze(0).unsqueeze(0)
-    
-    else:
-        B, T = padding_mask.shape
-        ones = ones.unsqueeze(0).repeat(B, 1, 1)
-        ones[:, :, :T] = padding_mask.unsqueeze(1).repeat(1, max_seq_length, 1)
-        return torch.tril(ones).unsqueeze(1)
+def build_mask_cache(max_seq_length: int, device: Optional[torch.device] = None) -> torch.Tensor:
+    ones = torch.ones((max_seq_length, max_seq_length),
+                      device=device, dtype=torch.bool)
+    return torch.tril(ones).unsqueeze(0).unsqueeze(0)
