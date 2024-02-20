@@ -161,6 +161,7 @@ class Block(nn.Module):
         self.norm_2 = None if config.shared_attention_norm else config.norm_class(
             config.n_embd, eps=config.norm_eps)
         self.mlp = config.mlp_class(config)
+        self.mlp_dropout = nn.Dropout(config.pdrop) if config.dropout else None
 
         self.config = config
 
@@ -177,6 +178,7 @@ class Block(nn.Module):
         if self.config.parallel_residual:
             n_2 = n_1 if self.config.shared_attention_norm else self.norm_2(x)
             x = self.mlp(n_2) + h + x
+            if self.mlp_dropout: x = self.mlp_dropout(x)
         else:
             if self.config.shared_attention_norm:
                 raise NotImplementedError(
@@ -184,7 +186,8 @@ class Block(nn.Module):
                     " (non-parallel residual and shared attention norm)."
                 )
             x = h + x
-            x = self.mlp(self.norm_2(x)) + x
+            x2 = self.mlp(self.norm_2(x))
+            x = self.mlp_dropout(x2) + x if self.mlp_dropout else x2 + x
         return x
 
 
